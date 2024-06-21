@@ -23,8 +23,21 @@ defmodule X86Decoder do
   def reg(0, reg), do: byte_reg(reg)
   def reg(1, reg), do: word_reg(reg)
 
+  # Base Address
+  def base_rm_ea(0b000), do: "dx + si"
+  def base_rm_ea(0b001), do: "bx + di"
+  def base_rm_ea(0b010), do: "bp + si"
+  def base_rm_ea(0b011), do: "bp + di"
+  def base_rm_ea(0b100), do: "sp"
+  def base_rm_ea(0b101), do: "di"
+  def base_rm_ea(0b110), do: "bp"
+  def base_rm_ea(0b111), do: "bx"
+
   def destination_source(0, reg, rm), do: {reg, rm}
   def destination_source(1, reg, rm), do: {rm, reg}
+
+  def get_explicit_size(0), do: "byte"
+  def get_explicit_size(1), do: "word"
 
   def read_instruction(path) do
     {:ok, content} = File.read(path)
@@ -35,30 +48,46 @@ defmodule X86Decoder do
 
   def decode(<<>>, acc), do: acc |> Enum.reverse()
 
-  # immediate to register byte
-  def decode(<<0b1011::4, 0::1, reg::3, val::8, rest::binary>>, acc),
-    do: decode(rest, ["mov #{reg(0, reg)}, #{val} " | acc])
+  # immediate to register
+  def decode(<<0b1011::4, w::1, reg::3, rest::binary>>, acc) do
+    {immediate, rest} = pick_immediate(w, rest)
+    decode(rest, ["mov #{reg(w, reg)}, #{immediate}" | acc])
+  end
 
-  # immediate to register word
-  def decode(<<0b1011::4, 1::1, reg::3, val::little-16, rest::binary>>, acc),
-    do: decode(rest, ["mov #{reg(1, reg)}, #{val}" | acc])
+  # register to memory or memory to register or register to register
+  def decode(<<0b100010::6, d::1, w::1, rest::binary>>, acc) do
+    {decoded_instruction, rest} = decode_reg_to_memory(d, w, rest)
+    decode(rest, [decoded_instruction | acc])
+  end
+
+  def decode(<<0b1100011::7, w::1, rest::binary>>, acc) do
+    {decoded_instruction, rest} = decode_immediate_to_register(w, rest)
+    decode(rest, [decoded_instruction | acc])
+  end
+
+  # decode immediate to register memory
+  def decode_immediate_to_register(w_bit, <<mod::2, 0b000::3, rm::3, rest::binary>>) do
+    {decoded_rm_eac, rest} = decode_full_eac(mod, rm, rest)
+    {immediate, rest} = pick_immediate(w_bit, rest)
+    {"mov #{decoded_rm_eac}, #{get_explicit_size(w_bit)} #{immediate}", rest}
+  end
 
   # register to register
-  def decode(<<0b100010::6, d::1, w::1, 0b11::2, reg::3, rm::3, rest::binary>>, acc) do
-    {source, destination} = destination_source(d, reg, rm)
-    line = "mov #{reg(w, destination)}, #{reg(w, source)}"
-    decode(rest, [line | acc])
+  def decode_reg_to_memory(d_bit, w_bit, <<0b11::2, reg::3, rm::3, rest::binary>>) do
+    {source, destination} = destination_source(d_bit, reg, rm)
+    {"mov #{reg(w_bit, destination)}, #{reg(w_bit, source)}", rest}
   end
 
-  # register to memory or memory to register.
-  def decode(<<0b100010::6, d::1, w::1, mod::2, reg::3, rm::3, rest::binary>>, acc) do
-    # if mod is 00 and rm is 110, it'a 16 bit direct address calculation
+  # register to memory
+  def decode_reg_to_memory(d_bit, w_bit, <<mod::2, reg::3, rm::3, rest::binary>>) do
     {decoded_rm_eac, rest} = decode_full_eac(mod, rm, rest)
-    decoded_reg = reg(w, reg)
-    {source, destination} = destination_source(d, decoded_reg, decoded_rm_eac)
-    line = "mov #{destination}, #{source}"
-    decode(rest, [line | acc])
+    decoded_reg = reg(w_bit, reg)
+    {source, destination} = destination_source(d_bit, decoded_reg, decoded_rm_eac)
+    {"mov #{destination}, #{source}", rest}
   end
+
+  def pick_immediate(0 = _w_bit, <<val::signed-8, rest::binary>>), do: {val, rest}
+  def pick_immediate(1 = _w_bit, <<val::little-16, rest::binary>>), do: {val, rest}
 
   def decode_full_eac(0b00 = _mod, 0b110 = _rm, <<address::little-16, rest::binary>>),
     do: {"[#{address}]", rest}
@@ -88,14 +117,4 @@ defmodule X86Decoder do
 
   defp disp_string(disp) when disp > 0, do: "+ #{abs(disp)}"
   defp disp_string(disp) when disp < 0, do: "- #{abs(disp)}"
-
-  # Base Address
-  def base_rm_ea(0b000), do: "dx + si"
-  def base_rm_ea(0b001), do: "bx + di"
-  def base_rm_ea(0b010), do: "bp + si"
-  def base_rm_ea(0b011), do: "bp + di"
-  def base_rm_ea(0b100), do: "sp"
-  def base_rm_ea(0b101), do: "di"
-  def base_rm_ea(0b110), do: "bp"
-  def base_rm_ea(0b111), do: "bx"
 end

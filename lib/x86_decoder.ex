@@ -1,6 +1,10 @@
 defmodule X86Decoder do
+  # mov
   def operation(0b100010), do: "mov"
   def operation(0b1011), do: "mov"
+
+  # add
+  def operation(0b0000000), do: "add"
 
   def byte_reg(0b000), do: "al"
   def byte_reg(0b001), do: "cl"
@@ -48,6 +52,7 @@ defmodule X86Decoder do
 
   def decode(<<>>, acc), do: acc |> Enum.reverse()
 
+  # MOV
   # immediate to register
   def decode(<<0b1011::4, w::1, reg::3, rest::binary>>, acc) do
     {immediate, rest} = pick_immediate(w, rest)
@@ -57,25 +62,50 @@ defmodule X86Decoder do
   # register to memory or memory to register or register to register
   def decode(<<0b100010::6, d::1, w::1, rest::binary>>, acc) do
     {decoded_instruction, rest} = decode_reg_to_memory(d, w, rest)
-    decode(rest, [decoded_instruction | acc])
+    decode(rest, ["mov #{decoded_instruction}" | acc])
   end
 
+  # immediate to register/memory
   def decode(<<0b1100011::7, w::1, rest::binary>>, acc) do
-    {decoded_instruction, rest} = decode_immediate_to_register(w, rest)
-    decode(rest, [decoded_instruction | acc])
+    {decoded_instruction, rest} = decode_immediate_to_register_memory(w, rest)
+    decode(rest, ["mov #{decoded_instruction}" | acc])
+  end
+
+  # ADD
+  # Add memory/register with memory/register
+  def decode(<<0b000000::6, d::1, w::1, rest::binary>>, acc) do
+    {decoded, rest} = decode_reg_to_memory(d, w, rest)
+    decode(rest, ["add #{decoded}" | acc])
+  end
+
+  # immediate to register/ memory
+  def decode(<<0b100000::6, s::1, w::1, rest::binary>>, acc) do
+    {instruction, rest} = decode_immediate_to_register_memory_signed(s, w, rest)
+    decode(rest, ["add #{instruction}" | acc])
   end
 
   # decode immediate to register memory
-  def decode_immediate_to_register(w_bit, <<mod::2, 0b000::3, rm::3, rest::binary>>) do
+  def decode_immediate_to_register_memory(w_bit, <<mod::2, 0b000::3, rm::3, rest::binary>>) do
     {decoded_rm_eac, rest} = decode_full_eac(mod, rm, rest)
     {immediate, rest} = pick_immediate(w_bit, rest)
-    {"mov #{decoded_rm_eac}, #{get_explicit_size(w_bit)} #{immediate}", rest}
+    {"#{decoded_rm_eac}, #{get_explicit_size(w_bit)} #{immediate}", rest}
+  end
+
+  def decode_immediate_to_register_memory_signed(
+        s_bit,
+        w_bit,
+        <<mod::2, 0b000::3, rm::3, rest::binary>>
+      ) do
+    {decoded_rm_eac, rest} = decode_full_eac(mod, rm, rest)
+    {immediate, rest} = pick_immediate_signed(s_bit, w_bit, rest)
+
+    {"#{get_explicit_size(w_bit)} #{decoded_rm_eac},  #{immediate}", rest}
   end
 
   # register to register
   def decode_reg_to_memory(d_bit, w_bit, <<0b11::2, reg::3, rm::3, rest::binary>>) do
     {source, destination} = destination_source(d_bit, reg, rm)
-    {"mov #{reg(w_bit, destination)}, #{reg(w_bit, source)}", rest}
+    {"#{reg(w_bit, destination)}, #{reg(w_bit, source)}", rest}
   end
 
   # register to memory
@@ -83,11 +113,31 @@ defmodule X86Decoder do
     {decoded_rm_eac, rest} = decode_full_eac(mod, rm, rest)
     decoded_reg = reg(w_bit, reg)
     {source, destination} = destination_source(d_bit, decoded_reg, decoded_rm_eac)
-    {"mov #{destination}, #{source}", rest}
+    {"#{destination}, #{source}", rest}
   end
 
   def pick_immediate(0 = _w_bit, <<val::signed-8, rest::binary>>), do: {val, rest}
   def pick_immediate(1 = _w_bit, <<val::little-16, rest::binary>>), do: {val, rest}
+
+  def pick_immediate_signed(sign_bit, w_bit, value) do
+    case {sign_bit, w_bit} do
+      {0, 0} ->
+        <<val::8, rest::binary>> = value
+        {val, rest}
+
+      {0, 1} ->
+        <<val::little-16, rest::binary>> = value
+        {val, rest}
+
+      {1, 0} ->
+        <<val::signed-8, rest::binary>> = value
+        {val, rest}
+
+      {1, 1} ->
+        <<val::signed-8, rest::binary>> = value
+        {val, rest}
+    end
+  end
 
   def decode_full_eac(0b00 = _mod, 0b110 = _rm, <<address::little-16, rest::binary>>),
     do: {"[#{address}]", rest}

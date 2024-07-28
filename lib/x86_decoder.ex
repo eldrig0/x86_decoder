@@ -78,7 +78,7 @@ defmodule X86Decoder do
     decode(rest, ["add #{decoded}" | acc])
   end
 
-  # immediate to register/ memory
+  # immediate to register/memory
   def decode(<<0b100000::6, s::1, w::1, rest::binary>>, acc) do
     {instruction, rest} = decode_immediate_to_register_memory_signed(s, w, rest)
     decode(rest, ["add #{instruction}" | acc])
@@ -91,12 +91,18 @@ defmodule X86Decoder do
     {"#{decoded_rm_eac}, #{get_explicit_size(w_bit)} #{immediate}", rest}
   end
 
+  # This does not handle mod value of 11
   def decode_immediate_to_register_memory_signed(
         s_bit,
         w_bit,
         <<mod::2, 0b000::3, rm::3, rest::binary>>
       ) do
-    {decoded_rm_eac, rest} = decode_full_eac(mod, rm, rest)
+    {decoded_rm_eac, rest} =
+      case mod do
+        0b11 -> {}
+        _ -> decode_full_eac(mod, rm, rest)
+      end
+
     {immediate, rest} = pick_immediate_signed(s_bit, w_bit, rest)
 
     {"#{get_explicit_size(w_bit)} #{decoded_rm_eac},  #{immediate}", rest}
@@ -160,6 +166,11 @@ defmodule X86Decoder do
       |> format_eac_syntax(disp)
 
     {eac, rest}
+  end
+
+  def decode_full_eac(mod, rm, <<rest::binary>>) do
+    IO.puts("Issue with decoding")
+    IO.inspect(mod)
   end
 
   def format_eac_syntax(eac, 0), do: "[#{eac}]"
